@@ -16,6 +16,7 @@ from transaction import (
     SetHook,
     Payment,
     Trust,
+    XChainAccountCreate,
     XChainCreateBridge,
     XChainCreateClaimID,
     XChainCommit,
@@ -1725,7 +1726,7 @@ class BridgeRepl(cmd.Cmd):
 
     def do_bridge_create(self, line):
         args = line.split()
-        if len(args) > 5:
+        if len(args) > 6:
             print(f'Error: bridge_create at most five arguments. Type "help" for help.')
             return
         if len(args) < 4:
@@ -1733,6 +1734,15 @@ class BridgeRepl(cmd.Cmd):
                 f'Error: bridge_create at least four arguments. Type "help" for help.'
             )
             return
+
+        in_drops = False
+        if args and args[-1] in ["xrp", "drops"]:
+            unit = args[-1]
+            args.pop()
+            if unit == "xrp":
+                in_drops = False
+            elif unit == "drops":
+                in_drops = True
 
         if args[0] not in ["mainchain", "sidechain"]:
             print(
@@ -1758,7 +1768,8 @@ class BridgeRepl(cmd.Cmd):
             reward_amt_value = int(args[0])
         except:
             try:
-                reward_amt_value = float(args[0])
+                if not in_drops:
+                    reward_amt_value = float(args[0])
             except:
                 pass
 
@@ -1767,19 +1778,22 @@ class BridgeRepl(cmd.Cmd):
             return
         args.pop(0)
 
+        if not in_drops:
+            reward_amt_value *= 1_000_000
+
         min_create_amt_value = None
         try:
             min_create_amt_value = int(args[0])
         except:
             try:
-                min_create_amt_value = float(args[0])
+                if not in_drops:
+                    min_create_amt_value = float(args[0])
             except:
                 pass
 
-        if min_create_amt_value is None:
-            print(f"Error: {args[0]} is an invalid amount.")
-            return
-        if min_create_amt_value is not none:
+        if min_create_amt_value is not None:
+            if not in_drops:
+                min_create_amt_value *= 1_000_000
             args.pop(0)
 
         bridge_alias = args[0]
@@ -1812,7 +1826,7 @@ class BridgeRepl(cmd.Cmd):
         print(
             "\n".join(
                 [
-                    "bridge_create (mainchain | sidechain) account reward_amt [min_create_amt] bridge_alias",
+                    "bridge_create (mainchain | sidechain) account reward_amt [min_create_amt] bridge_alias [xrp | drops]",
                     "Create a new bridge on the given chain",
                 ]
             )
@@ -1826,9 +1840,9 @@ class BridgeRepl(cmd.Cmd):
 
     def do_xchain_claimid_create(self, line):
         args = line.split()
-        if len(args) != 5:
+        if not (5<=len(args) <=6):
             print(
-                f'Error: xchain_claimid_create takes exactly three arguments. Type "help" for help.'
+                f'Error: xchain_claimid_create takes five or six arguments. Type "help" for help.'
             )
             return
 
@@ -1838,6 +1852,15 @@ class BridgeRepl(cmd.Cmd):
                 f'Error: First argument must specify the chain. Type "help" for help.'
             )
             return
+
+        in_drops = False
+        if args and args[-1] in ["xrp", "drops"]:
+            unit = args[-1]
+            args.pop()
+            if unit == "xrp":
+                in_drops = False
+            elif unit == "drops":
+                in_drops = True
 
         if args[0] == "mainchain":
             chain = self.mc_app
@@ -1866,7 +1889,8 @@ class BridgeRepl(cmd.Cmd):
             reward_amt_value = int(args[0])
         except:
             try:
-                reward_amt_value = float(args[0])
+                if not in_drops:
+                    reward_amt_value = float(args[0])
             except:
                 pass
 
@@ -1874,6 +1898,8 @@ class BridgeRepl(cmd.Cmd):
             print(f"Error: {args[0]} is an invalid amount.")
             return
         args.pop(0)
+        if not in_drops:
+            reward_amt_value *= 1_000_000
 
         bridge_alias = args[0]
         if not bridge_alias in self.bridge_aliases:
@@ -1917,7 +1943,7 @@ class BridgeRepl(cmd.Cmd):
         print(
             "\n".join(
                 [
-                    f"xchain_claimid_create (sidechain | mainchain) src_account other_chain_account, reward bridge_alias",
+                    f"xchain_claimid_create (sidechain | mainchain) src_account other_chain_account reward bridge_alias [xrp | drops]",
                     "Create a sidechain sequence number (use get_last_txn_metadata to get the value)",
                 ]
             )
@@ -2067,6 +2093,155 @@ class BridgeRepl(cmd.Cmd):
         )
 
     # xchain_commit
+    ##################
+
+    ##################
+    # xchain_account_create
+    def do_xchain_account_create(self, line):
+        try:
+            args = line.split()
+            if len(args) != 6:
+                print(
+                    f'Error: xchain_account_create takes at exactly six arguments. Type "help" for help.'
+                )
+                return
+
+            in_drops = False
+            if args and args[-1] in ["xrp", "drops"]:
+                unit = args[-1]
+                args.pop()
+                if unit == "xrp":
+                    in_drops = False
+                elif unit == "drops":
+                    in_drops = True
+            chain = None
+
+            if args[0] not in ["mainchain", "sidechain"]:
+                print(
+                    f'Error: First argument must specify the chain. Type "help" for help.'
+                )
+                return
+
+            if args[0] == "mainchain":
+                chain = self.mc_app
+                other_chain = self.sc_app
+            else:
+                chain = self.sc_app
+                other_chain = self.mc_app
+            args.pop(0)
+
+            nickname = args[0]
+            if not chain.is_alias(nickname):
+                print(f"Error: {nickname} is not in the address book")
+                return
+            src_account = chain.account_from_alias(nickname)
+            args.pop(0)
+
+            nickname = args[0]
+            if not other_chain.is_alias(nickname):
+                print(f"Error: {nickname} is not in the address book")
+                return
+            dst_account = other_chain.account_from_alias(nickname)
+            args.pop(0)
+
+            bridge_alias = args[0]
+            if not bridge_alias in self.bridge_aliases:
+                print(f"Error: {bridge_alias} is not a known bridge")
+                return
+            args.pop(0)
+            bridge = self.bridge_aliases[bridge_alias]
+
+            amt_value = None
+            try:
+                amt_value = int(args[0])
+            except:
+                try:
+                    if not in_drops:
+                        amt_value = float(args[0])
+                except:
+                    pass
+
+            if amt_value is None:
+                print(f"Error: {args[0]} is an invalid amount.")
+                return
+            args.pop(0)
+
+            if not in_drops:
+                amt_value *= 1_000_000
+            amt = Asset(value=amt_value)
+
+            amt_value = None
+            try:
+                amt_value = int(args[0])
+            except:
+                try:
+                    if not in_drops:
+                        amt_value = float(args[0])
+                except:
+                    pass
+
+            if amt_value is None:
+                print(f"Error: {args[0]} is an invalid amount.")
+                return
+            args.pop(0)
+
+            if not in_drops:
+                amt_value *= 1_000_000
+
+            reward_amt = Asset(value=amt_value)
+
+            assert not args
+
+            chain(
+                XChainAccountCreate(
+                    account=src_account,
+                    dst = dst_account,
+                    bridge=bridge,
+                    amount=amt,
+                    signature_reward = reward_amt,
+                )
+            )
+            chain.maybe_ledger_accept()
+        except Exception as e:
+            print(
+                f"Unexpected error: {e=}",
+                flush=True,
+            )
+            traceback.print_exc()
+
+    def complete_xchain_account_create(self, text, line, begidx, endidx):
+        args = line.split()
+        arg_num = len(args)
+        if not text:
+            arg_num += 1
+        if arg_num == 2:  # chain
+            return self._complete_chain(text, line)
+        elif arg_num == 3:  # src account
+            return self._complete_account(text, line, chain_name=args[1])
+        elif arg_num == 4:  # dst account
+            return self._complete_account(text, line, chain_name=_other_chain_name(args[1]))
+        elif arg_num == 4:  # sidechain
+            return self._complete_bridge_alias(text, line, chain_name=args[1])
+        elif arg_num == 6:  # amount
+            return []
+        elif arg_num == 7:  # reward amount
+            return []
+        elif arg_num == 8:  # drops or xrp or asset
+            return self._complete_unit(text, line) + self._complete_asset(
+                text, line, chain_name=args[1])
+        return []
+
+    def help_xchain_account_create(self):
+        print(
+            "\n".join(
+                [
+                    f"xchain_account_create (sidechain | mainchain) src_account dst_account bridge_alias amount reward_amount [xrp | drops]",
+                    "Initiate a sidechain account create.",
+                ]
+            )
+        )
+
+    # xchain_account_create
     ##################
 
     ##################
@@ -2248,7 +2423,6 @@ class BridgeRepl(cmd.Cmd):
 
     # EOF
     ##################
-
 
 def repl(mc_app: App, sc_app: App):
     BridgeRepl(mc_app, sc_app).cmdloop()

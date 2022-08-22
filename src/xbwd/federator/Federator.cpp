@@ -417,43 +417,22 @@ Federator::onEvent(event::XChainAccountCreateCommitDetected const& e)
         return sig;
     }();
 
-    auto const encodedAmtOpt =
-        [&]() -> std::optional<std::vector<std::uint8_t>> {
-        if (!e.deliveredAmt_)
-            return std::nullopt;
-        ripple::Serializer s;
-        e.deliveredAmt_->add(s);
-        return std::move(s.modData());
-    }();
-
-    auto const encodedRewardAmt = [&] {
-        ripple::Serializer s;
-        e.rewardAmt_.add(s);
-        return std::move(s.modData());
-    }();
-
-    std::vector<std::uint8_t> const encodedBridge = [&] {
-        ripple::Serializer s;
-        sidechain_.add(s);
-        return std::move(s.modData());
-    }();
-
     {
         auto session = app_.getXChainTxnDB().checkoutDb();
 
         // Soci blob does not play well with optional. Store an empty blob when
         // missing delivered amount
         soci::blob amtBlob{*session};
-        if (encodedAmtOpt)
+        if (e.deliveredAmt_)
         {
-            convert(*encodedAmtOpt, amtBlob);
+            convert(*e.deliveredAmt_, amtBlob);
         }
 
         soci::blob rewardAmtBlob{*session};
-        convert(encodedRewardAmt, rewardAmtBlob);
+        convert(e.rewardAmt_, rewardAmtBlob);
 
         soci::blob bridgeBlob(*session);
-        convert(encodedBridge, bridgeBlob);
+        convert(sidechain_, bridgeBlob);
 
         soci::blob sendingAccountBlob(*session);
         // Convert to an AccountID first, because if the type changes we want to
@@ -475,6 +454,31 @@ Federator::onEvent(event::XChainAccountCreateCommitDetected const& e)
 
         soci::blob otherChainDstBlob(*session);
         convert(dst, otherChainDstBlob);
+
+        if (e.deliveredAmt_)
+            JLOGV(
+                j_.trace(),
+                "Insert into create table",
+                ripple::jv("table_name", tblName),
+                ripple::jv("success", success),
+                ripple::jv("create_count", e.createCount_),
+                ripple::jv("amt", *e.deliveredAmt_),
+                ripple::jv("reward_amt", e.rewardAmt_),
+                ripple::jv("sending_account", sendingAccount),
+                ripple::jv("reward_account", rewardAccount),
+                ripple::jv("other_chain_dst", dst));
+        else
+            JLOGV(
+                j_.trace(),
+                "Insert into create table",
+                ripple::jv("table_name", tblName),
+                ripple::jv("success", success),
+                ripple::jv("create_count", e.createCount_),
+                ripple::jv("amt", "no delivered amt"),
+                ripple::jv("reward_amt", e.rewardAmt_),
+                ripple::jv("sending_account", sendingAccount),
+                ripple::jv("reward_account", rewardAccount),
+                ripple::jv("other_chain_dst", dst));
 
         auto sql = fmt::format(
             R"sql(INSERT INTO {table_name}

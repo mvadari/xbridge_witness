@@ -334,6 +334,8 @@ doWitnessAccountCreate(App& app, Json::Value const& in, Json::Value& result)
                 return "bridge";
             if (!optAmt)
                 return "sending_amount";
+            if (!optCreateCount)
+                return "create_count";
             if (!optRewardAmt)
                 return "reward_amount";
             if (!optDoor)

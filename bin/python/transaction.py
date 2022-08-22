@@ -455,7 +455,7 @@ class XChainCommit(Transaction):
 
 
 class XChainClaim(Transaction):
-    def __init__(self, *, dst: Account, **rest):
+    def __init__(self, *, dst: Account, dst_tag: Optional[int]=None, **rest):
         super().__init__(**rest)
         self.dst = dst
 
@@ -465,5 +465,27 @@ class XChainClaim(Transaction):
             **txn,
             "TransactionType": "XChainClaim",
             "Destination": self.dst.account_id,
+        }
+        if dst_tag is not None:
+            txn["DestinationTag"] = dst_tag
+        return txn
+
+class XChainAccountCreate(Transaction):
+    def __init__(self, *, bridge: Bridge, amount: Asset, signature_reward: Asset, dst: Account, **rest):
+        super().__init__(**rest)
+        self.bridge = bridge
+        self.amount = amount
+        self.signature_reward = signature_reward
+        self.dst = dst
+
+    def to_cmd_obj(self) -> dict:
+        txn = super().to_cmd_obj()
+        txn = {
+            **txn,
+            "TransactionType": "SidechainXChainAccountCreate",
+            "XChainBridge": self.bridge.to_cmd_obj(),
+            "Destination": self.dst.account_id,
+            "Amount": self.amount.to_cmd_obj(),
+            "SignatureReward": self.signature_reward.to_cmd_obj(),
         }
         return txn
