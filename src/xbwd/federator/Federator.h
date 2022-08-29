@@ -18,6 +18,8 @@
 */
 //==============================================================================
 
+#include <xbwd/app/Config.h>
+#include <xbwd/basics/ChainTypes.h>
 #include <xbwd/basics/ThreadSaftyAnalysis.h>
 #include <xbwd/client/ChainListener.h>
 #include <xbwd/federator/FederatorEvents.h>
@@ -26,10 +28,16 @@
 #include <ripple/beast/utility/Journal.h>
 #include <ripple/json/json_value.h>
 #include <ripple/protocol/PublicKey.h>
+#include <ripple/protocol/STXChainAttestationBatch.h>
 #include <ripple/protocol/SecretKey.h>
 
 #include <boost/asio.hpp>
 
+#include <atomic>
+#include <condition_variable>
+#include <memory>
+#include <optional>
+#include <thread>
 #include <vector>
 
 namespace xbwd {
@@ -38,35 +46,47 @@ class App;
 
 class Federator : public std::enable_shared_from_this<Federator>
 {
-    std::thread thread_;
+    enum LoopTypes { lt_event, lt_txnSubmit, lt_last };
+    std::array<std::thread, lt_last> threads_;
     bool running_ = false;
     std::atomic<bool> requestStop_ = false;
 
     App& app_;
-    ripple::STXChainBridge const sidechain_;
-    std::shared_ptr<ChainListener> mainchainListener_;
-    std::shared_ptr<ChainListener> sidechainListener_;
+    ripple::STXChainBridge const bridge_;
+
+    struct Chain
+    {
+        std::shared_ptr<ChainListener> listener_;
+        ripple::AccountID rewardAccount_;
+        std::optional<config::TxnSubmit> txnSubmit_;
+
+        explicit Chain(config::ChainConfig const& config);
+    };
+
+    ChainArray<Chain> chains_;
 
     mutable std::mutex eventsMutex_;
     std::vector<FederatorEvent> GUARDED_BY(eventsMutex_) events_;
 
+    mutable std::mutex txnsMutex_;
+    std::vector<ripple::STXChainAttestationBatch> GUARDED_BY(txnsMutex_) txns_;
+
     ripple::KeyType const keyType_;
     ripple::PublicKey const signingPK_;
     ripple::SecretKey const signingSK_;
-    ripple::AccountID lockingChainRewardAccount_;
-    ripple::AccountID issuingChainRewardAccount_;
 
     // Use a condition variable to prevent busy waiting when the queue is
     // empty
-    mutable std::mutex m_;
-    std::condition_variable cv_;
+    mutable std::array<std::mutex, lt_last> cvMutexes_;
+    mutable std::array<std::condition_variable, lt_last> cvs_;
 
     // prevent the main loop from starting until explictly told to run.
     // This is used to allow bootstrap code to run before any events are
     // processed
-    mutable std::mutex mainLoopMutex_;
-    bool mainLoopLocked_{true};
-    std::condition_variable mainLoopCv_;
+    mutable std::array<std::mutex, lt_last> loopMutexes_;
+    std::array<bool, lt_last> loopLocked_;
+    std::array<std::condition_variable, lt_last> loopCvs_;
+
     beast::Journal j_;
 
 public:
@@ -80,11 +100,7 @@ public:
     Federator(
         PrivateTag,
         App& app,
-        ripple::STXChainBridge const& sidechain,
-        ripple::KeyType keyType,
-        ripple::SecretKey const& signingKey,
-        ripple::AccountID lockingChainRewardAccount,
-        ripple::AccountID issuingChainRewardAccount,
+        config::Config const& config,
         beast::Journal j);
 
     ~Federator();
@@ -120,6 +136,9 @@ private:
     mainLoop() EXCLUDES(mainLoopMutex_);
 
     void
+    txnSubmitLoop() EXCLUDES(txnSubmitLoopMutex_);
+
+    void
     onEvent(event::XChainCommitDetected const& e);
 
     void
@@ -131,17 +150,24 @@ private:
     void
     onEvent(event::HeartbeatTimer const& e);
 
+    void
+    pushTxn(
+        ripple::STXChainBridge const& bridge,
+        ripple::AttestationBatch::AttestationClaim const& att);
+
+    void
+    pushTxn(
+        ripple::STXChainBridge const& bridge,
+        ripple::AttestationBatch::AttestationCreateAccount const& att);
+
+    void
+    submitTxn(ripple::STXChainAttestationBatch const& batch);
+
     friend std::shared_ptr<Federator>
     make_Federator(
         App& app,
         boost::asio::io_service& ios,
-        ripple::STXChainBridge const& sidechain,
-        ripple::KeyType keyType,
-        ripple::SecretKey const& signingKey,
-        beast::IP::Endpoint const& mainchainIp,
-        beast::IP::Endpoint const& sidechainIp,
-        ripple::AccountID lockingChainRewardAccount,
-        ripple::AccountID issuingChainRewardAccount,
+        config::Config const& config,
         beast::Journal j);
 };
 
@@ -149,13 +175,7 @@ std::shared_ptr<Federator>
 make_Federator(
     App& app,
     boost::asio::io_service& ios,
-    ripple::STXChainBridge const& sidechain,
-    ripple::KeyType keyType,
-    ripple::SecretKey const& signingKey,
-    beast::IP::Endpoint const& mainchainIp,
-    beast::IP::Endpoint const& sidechainIp,
-    ripple::AccountID lockingChainRewardAccount,
-    ripple::AccountID issuingChainRewardAccount,
+    config::Config const& config,
     beast::Journal j);
 
 }  // namespace xbwd

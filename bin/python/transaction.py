@@ -436,11 +436,20 @@ class XChainCreateClaimID(Transaction):
 
 
 class XChainCommit(Transaction):
-    def __init__(self, *, bridge: Bridge, claimID: int, amount: Asset, **rest):
+    def __init__(
+        self,
+        *,
+        bridge: Bridge,
+        claimID: int,
+        amount: Asset,
+        dst: Optional[Account] = None,
+        **rest,
+    ):
         super().__init__(**rest)
         self.bridge = bridge
         self.claimID = claimID
         self.amount = amount
+        self.otherChainDestination = dst
 
     def to_cmd_obj(self) -> dict:
         txn = super().to_cmd_obj()
@@ -451,11 +460,13 @@ class XChainCommit(Transaction):
             "Amount": self.amount.to_cmd_obj(),
             "XChainClaimID": self.claimID,
         }
+        if self.otherChainDestination != None:
+            txn["OtherChainDestination"] = self.otherChainDestination.account_id
         return txn
 
 
 class XChainClaim(Transaction):
-    def __init__(self, *, dst: Account, dst_tag: Optional[int]=None, **rest):
+    def __init__(self, *, dst: Account, dst_tag: Optional[int] = None, **rest):
         super().__init__(**rest)
         self.dst = dst
 
@@ -470,8 +481,17 @@ class XChainClaim(Transaction):
             txn["DestinationTag"] = dst_tag
         return txn
 
+
 class XChainAccountCreate(Transaction):
-    def __init__(self, *, bridge: Bridge, amount: Asset, signature_reward: Asset, dst: Account, **rest):
+    def __init__(
+        self,
+        *,
+        bridge: Bridge,
+        amount: Asset,
+        signature_reward: Asset,
+        dst: Account,
+        **rest,
+    ):
         super().__init__(**rest)
         self.bridge = bridge
         self.amount = amount

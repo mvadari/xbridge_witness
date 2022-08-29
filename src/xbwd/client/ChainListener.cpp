@@ -128,6 +128,8 @@ ChainListener::send(
         ripple::jv("params", params));
 
     auto id = wsClient_->send(cmd, params);
+    JLOGV(j_.trace(), "ChainListener send id", ripple::jv("id", id));
+
     std::lock_guard lock(callbacksMtx_);
     callbacks_.emplace(id, onResponse);
 }
@@ -137,8 +139,8 @@ ChainListener::chainName() const
 {
     // Note: If this function is ever changed to return a value instead of a
     // ref, review the code to ensure the "jv" functions don't bind to temps
-    static const std::string m("Mainchain");
-    static const std::string s("Sidechain");
+    static const std::string m("Locking");
+    static const std::string s("Issuing");
     return isMainchain_ ? m : s;
 }
 
@@ -505,6 +507,21 @@ ChainListener::processMessage(Json::Value const& msg)
         return {};
     }();
 
+    auto const ledgerBoundary = [&]() -> bool {
+        if (msg.isMember(ripple::jss::account_history_ledger_boundary) &&
+            msg[ripple::jss::account_history_ledger_boundary].isBool() &&
+            msg[ripple::jss::account_history_ledger_boundary].asBool())
+        {
+            JLOGV(
+                j_.trace(),
+                "ledger boundary",
+                ripple::jv("seq", *lgrSeq),
+                ripple::jv("chain_name", chainName()));
+            return true;
+        }
+        return false;
+    }();
+
     switch (txnType)
     {
         case TxnType::xChainClaim: {
@@ -533,7 +550,8 @@ ChainListener::processMessage(Json::Value const& msg)
             }
             using namespace event;
             XChainTransferResult e{
-                isMainchain_ ? Dir::issuingToLocking : Dir::lockingToIssuing,
+                isMainchain_ ? ChainDir::issuingToLocking
+                             : ChainDir::lockingToIssuing,
                 *dst,
                 deliveredAmt,
                 *claimID,
@@ -570,7 +588,8 @@ ChainListener::processMessage(Json::Value const& msg)
             }
             using namespace event;
             XChainCommitDetected e{
-                isMainchain_ ? Dir::lockingToIssuing : Dir::issuingToLocking,
+                isMainchain_ ? ChainDir::lockingToIssuing
+                             : ChainDir::issuingToLocking,
                 *src,
                 *txnBridge,
                 deliveredAmt,
@@ -579,7 +598,8 @@ ChainListener::processMessage(Json::Value const& msg)
                 *lgrSeq,
                 *txnHash,
                 txnTER,
-                txnHistoryIndex};
+                txnHistoryIndex,
+                ledgerBoundary};
             pushEvent(std::move(e));
         }
         break;
@@ -684,7 +704,8 @@ ChainListener::processMessage(Json::Value const& msg)
             }
             using namespace event;
             XChainAccountCreateCommitDetected e{
-                isMainchain_ ? Dir::lockingToIssuing : Dir::issuingToLocking,
+                isMainchain_ ? ChainDir::lockingToIssuing
+                             : ChainDir::issuingToLocking,
                 *src,
                 *txnBridge,
                 deliveredAmt,
@@ -694,7 +715,8 @@ ChainListener::processMessage(Json::Value const& msg)
                 *lgrSeq,
                 *txnHash,
                 txnTER,
-                txnHistoryIndex};
+                txnHistoryIndex,
+                ledgerBoundary};
             pushEvent(std::move(e));
         }
         break;

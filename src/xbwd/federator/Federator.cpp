@@ -17,19 +17,22 @@
 */
 //==============================================================================
 
-#include "ripple/protocol/AccountID.h"
+#include "xbwd/basics/ChainTypes.h"
 #include <xbwd/federator/Federator.h>
 
 #include <xbwd/app/App.h>
 #include <xbwd/app/DBInit.h>
+#include <xbwd/federator/TxnSupport.h>
 
 #include <ripple/basics/strHex.h>
 #include <ripple/beast/core/CurrentThreadName.h>
 #include <ripple/json/Output.h>
 #include <ripple/json/json_reader.h>
 #include <ripple/json/json_writer.h>
+#include <ripple/protocol/AccountID.h>
 #include <ripple/protocol/SField.h>
 #include <ripple/protocol/STParsedJSON.h>
+#include <ripple/protocol/STTx.h>
 #include <ripple/protocol/STXChainAttestationBatch.h>
 #include <ripple/protocol/Seed.h>
 #include <ripple/protocol/jss.h>
@@ -39,7 +42,9 @@
 #include <chrono>
 #include <cmath>
 #include <exception>
+#include <future>
 #include <sstream>
+#include <stdexcept>
 
 namespace xbwd {
 
@@ -47,59 +52,47 @@ std::shared_ptr<Federator>
 make_Federator(
     App& app,
     boost::asio::io_service& ios,
-    ripple::STXChainBridge const& sidechain,
-    ripple::KeyType keyType,
-    ripple::SecretKey const& signingKey,
-    beast::IP::Endpoint const& mainchainIp,
-    beast::IP::Endpoint const& sidechainIp,
-    ripple::AccountID lockingChainRewardAccount,
-    ripple::AccountID issuingChainRewardAccount,
+    config::Config const& config,
     beast::Journal j)
 {
-    auto r = std::make_shared<Federator>(
-        Federator::PrivateTag{},
-        app,
-        sidechain,
-        keyType,
-        signingKey,
-        lockingChainRewardAccount,
-        issuingChainRewardAccount,
-        j);
+    auto r =
+        std::make_shared<Federator>(Federator::PrivateTag{}, app, config, j);
 
     std::shared_ptr<ChainListener> mainchainListener =
         std::make_shared<ChainListener>(
-            ChainListener::IsMainchain::yes, sidechain, r, j);
+            ChainListener::IsMainchain::yes, config.bridge, r, j);
     std::shared_ptr<ChainListener> sidechainListener =
         std::make_shared<ChainListener>(
-            ChainListener::IsMainchain::no, sidechain, r, j);
+            ChainListener::IsMainchain::no, config.bridge, r, j);
     r->init(
         ios,
-        mainchainIp,
+        config.lockingChainConfig.chainIp,
         std::move(mainchainListener),
-        sidechainIp,
+        config.issuingChainConfig.chainIp,
         std::move(sidechainListener));
 
     return r;
 }
 
+Federator::Chain::Chain(config::ChainConfig const& config)
+    : rewardAccount_{config.rewardAccount}, txnSubmit_(config.txnSubmit)
+{
+}
+
 Federator::Federator(
     PrivateTag,
     App& app,
-    ripple::STXChainBridge const& sidechain,
-    ripple::KeyType keyType,
-    ripple::SecretKey const& signingKey,
-    ripple::AccountID lockingChainRewardAccount,
-    ripple::AccountID issuingChainRewardAccount,
+    config::Config const& config,
     beast::Journal j)
     : app_{app}
-    , sidechain_{sidechain}
-    , keyType_{keyType}
-    , signingPK_{derivePublicKey(keyType, signingKey)}
-    , signingSK_{signingKey}
-    , lockingChainRewardAccount_{lockingChainRewardAccount}
-    , issuingChainRewardAccount_{issuingChainRewardAccount}
+    , bridge_{config.bridge}
+    , chains_{Chain{config.lockingChainConfig}, Chain{config.issuingChainConfig}}
+    , keyType_{config.keyType}
+    , signingPK_{derivePublicKey(config.keyType, config.signingKey)}
+    , signingSK_{config.signingKey}
     , j_(j)
 {
+    std::fill(loopLocked_.begin(), loopLocked_.end(), true);
     events_.reserve(16);
 }
 
@@ -111,10 +104,10 @@ Federator::init(
     beast::IP::Endpoint const& sidechainIp,
     std::shared_ptr<ChainListener>&& sidechainListener)
 {
-    mainchainListener_ = std::move(mainchainListener);
-    mainchainListener_->init(ios, mainchainIp);
-    sidechainListener_ = std::move(sidechainListener);
-    sidechainListener_->init(ios, sidechainIp);
+    chains_[ChainType::locking].listener_ = std::move(mainchainListener);
+    chains_[ChainType::locking].listener_->init(ios, mainchainIp);
+    chains_[ChainType::issuing].listener_ = std::move(sidechainListener);
+    chains_[ChainType::issuing].listener_->init(ios, sidechainIp);
 }
 
 Federator::~Federator()
@@ -130,9 +123,14 @@ Federator::start()
     requestStop_ = false;
     running_ = true;
 
-    thread_ = std::thread([this]() {
-        beast::setCurrentThreadName("Federator");
+    threads_[lt_event] = std::thread([this]() {
+        beast::setCurrentThreadName("FederatorEvents");
         this->mainLoop();
+    });
+
+    threads_[lt_txnSubmit] = std::thread([this]() {
+        beast::setCurrentThreadName("FederatorTxns");
+        this->txnSubmitLoop();
     });
 }
 
@@ -142,16 +140,18 @@ Federator::stop()
     if (running_)
     {
         requestStop_ = true;
+        for (int i = 0; i < lt_last; ++i)
         {
-            std::lock_guard<std::mutex> l(m_);
-            cv_.notify_one();
+            std::lock_guard l(cvMutexes_[i]);
+            cvs_[i].notify_one();
         }
 
-        thread_.join();
+        for (int i = 0; i < lt_last; ++i)
+            threads_[i].join();
         running_ = false;
     }
-    mainchainListener_->shutdown();
-    sidechainListener_->shutdown();
+    chains_[ChainType::locking].listener_->shutdown();
+    chains_[ChainType::issuing].listener_->shutdown();
 }
 
 void
@@ -159,14 +159,14 @@ Federator::push(FederatorEvent&& e)
 {
     bool notify = false;
     {
-        std::lock_guard<std::mutex> l{eventsMutex_};
+        std::lock_guard l{eventsMutex_};
         notify = events_.empty();
         events_.push_back(std::move(e));
     }
     if (notify)
     {
-        std::lock_guard<std::mutex> l(m_);
-        cv_.notify_one();
+        std::lock_guard l(cvMutexes_[lt_event]);
+        cvs_[lt_event].notify_one();
     }
 }
 
@@ -178,11 +178,10 @@ Federator::onEvent(event::XChainCommitDetected const& e)
         "onEvent XChainTransferDetected",
         ripple::jv("event", e.toJson()));
 
-    bool const wasLockingChainSend = (e.dir_ == event::Dir::lockingToIssuing);
-
-    auto const& tblName = wasLockingChainSend
-        ? db_init::xChainLockingToIssuingTableName()
-        : db_init::xChainIssuingToLockingTableName();
+    auto const& tblName = db_init::xChainTableName(e.dir_);
+    ChainType const dstChain = e.dir_ == ChainDir::lockingToIssuing
+        ? ChainType::issuing
+        : ChainType::locking;
 
     auto const txnIdHex = ripple::strHex(e.txnHash_.begin(), e.txnHash_.end());
 
@@ -206,12 +205,11 @@ Federator::onEvent(event::XChainCommitDetected const& e)
 
     int const success =
         ripple::isTesSuccess(e.status_) ? 1 : 0;  // soci complains about a bool
-    auto const& rewardAccount = wasLockingChainSend
-        ? issuingChainRewardAccount_
-        : lockingChainRewardAccount_;
+    auto const& rewardAccount = chains_[dstChain].rewardAccount_;
     auto const& optDst = e.otherChainDst_;
 
-    auto const sigOpt = [&]() -> std::optional<ripple::Buffer> {
+    auto const claimOpt =
+        [&]() -> std::optional<ripple::AttestationBatch::AttestationClaim> {
         if (!success)
             return std::nullopt;
         if (!e.deliveredAmt_)
@@ -223,38 +221,19 @@ Federator::onEvent(event::XChainCommitDetected const& e)
             return std::nullopt;
         }
 
-        auto const& bridge = e.bridge_;
-        auto const& sendingAccount = e.src_;
-        auto const& sendingAmount = *e.deliveredAmt_;
-        auto const& claimID = e.claimID_;
-
-        auto const toSign = ripple::AttestationBatch::AttestationClaim::message(
-            bridge,
-            sendingAccount,
-            sendingAmount,
+        return ripple::AttestationBatch::AttestationClaim{
+            e.bridge_,
+            signingPK_,
+            signingSK_,
+            e.src_,
+            *e.deliveredAmt_,
             rewardAccount,
-            wasLockingChainSend,
-            claimID,
-            optDst);
-
-        auto const sig =
-            sign(signingPK_, signingSK_, ripple::makeSlice(toSign));
-        {
-            // TODO: Remove this test code
-            //
-            ripple::AttestationBatch::AttestationClaim claim{
-                signingPK_,
-                sig,
-                sendingAccount,
-                sendingAmount,
-                rewardAccount,
-                wasLockingChainSend,
-                claimID,
-                optDst};
-            assert(claim.verify(bridge));
-        }
-        return sig;
+            e.dir_ == ChainDir::lockingToIssuing,
+            e.claimID_,
+            optDst};
     }();
+
+    assert(!claimOpt || claimOpt->verify(e.bridge_));
 
     auto const encodedAmtOpt =
         [&]() -> std::optional<std::vector<std::uint8_t>> {
@@ -267,15 +246,15 @@ Federator::onEvent(event::XChainCommitDetected const& e)
 
     std::vector<std::uint8_t> const encodedBridge = [&] {
         ripple::Serializer s;
-        sidechain_.add(s);
+        bridge_.add(s);
         return std::move(s.modData());
     }();
 
     {
         auto session = app_.getXChainTxnDB().checkoutDb();
 
-        // Soci blob does not play well with optional. Store an empty blob when
-        // missing delivered amount
+        // Soci blob does not play well with optional. Store an empty blob
+        // when missing delivered amount
         soci::blob amtBlob{*session};
         if (encodedAmtOpt)
         {
@@ -286,8 +265,8 @@ Federator::onEvent(event::XChainCommitDetected const& e)
         convert(encodedBridge, bridgeBlob);
 
         soci::blob sendingAccountBlob(*session);
-        // Convert to an AccountID first, because if the type changes we want to
-        // catch it.
+        // Convert to an AccountID first, because if the type changes we
+        // want to catch it.
         ripple::AccountID const& sendingAccount{e.src_};
         convert(sendingAccount, sendingAccountBlob);
 
@@ -298,9 +277,9 @@ Federator::onEvent(event::XChainCommitDetected const& e)
         convert(signingPK_, publicKeyBlob);
 
         soci::blob signatureBlob(*session);
-        if (sigOpt)
+        if (claimOpt)
         {
-            convert(*sigOpt, signatureBlob);
+            convert(claimOpt->signature, signatureBlob);
         }
 
         soci::blob otherChainDstBlob(*session);
@@ -325,6 +304,11 @@ Federator::onEvent(event::XChainCommitDetected const& e)
             soci::use(rewardAccountBlob), soci::use(otherChainDstBlob),
             soci::use(publicKeyBlob), soci::use(signatureBlob);
     }
+
+    if (claimOpt)
+    {
+        pushTxn(e.bridge_, *claimOpt);
+    }
 }
 
 void
@@ -335,11 +319,10 @@ Federator::onEvent(event::XChainAccountCreateCommitDetected const& e)
         "onEvent XChainAccountCreateDetected",
         ripple::jv("event", e.toJson()));
 
-    bool const wasLockingChainSend = (e.dir_ == event::Dir::lockingToIssuing);
-
-    auto const& tblName = wasLockingChainSend
-        ? db_init::xChainCreateAccountLockingTableName()
-        : db_init::xChainCreateAccountIssuingTableName();
+    auto const& tblName = db_init::xChainCreateAccountTableName(e.dir_);
+    ChainType const dstChain = e.dir_ == ChainDir::lockingToIssuing
+        ? ChainType::issuing
+        : ChainType::locking;
 
     auto const txnIdHex = ripple::strHex(e.txnHash_.begin(), e.txnHash_.end());
 
@@ -363,12 +346,11 @@ Federator::onEvent(event::XChainAccountCreateCommitDetected const& e)
 
     int const success =
         ripple::isTesSuccess(e.status_) ? 1 : 0;  // soci complains about a bool
-    auto const& rewardAccount = wasLockingChainSend
-        ? issuingChainRewardAccount_
-        : lockingChainRewardAccount_;
+    auto const& rewardAccount = chains_[dstChain].rewardAccount_;
     auto const& dst = e.otherChainDst_;
 
-    auto const sigOpt = [&]() -> std::optional<ripple::Buffer> {
+    auto const createOpt = [&]()
+        -> std::optional<ripple::AttestationBatch::AttestationCreateAccount> {
         if (!success)
             return std::nullopt;
         if (!e.deliveredAmt_)
@@ -380,42 +362,20 @@ Federator::onEvent(event::XChainAccountCreateCommitDetected const& e)
             return std::nullopt;
         }
 
-        auto const& bridge = e.bridge_;
-        auto const& sendingAccount = e.src_;
-        auto const& sendingAmount = *e.deliveredAmt_;
-        auto const& rewardAmount = e.rewardAmt_;
-        auto const& createCount = e.createCount_;
-
-        auto const toSign =
-            ripple::AttestationBatch::AttestationCreateAccount::message(
-                bridge,
-                sendingAccount,
-                sendingAmount,
-                rewardAmount,
-                rewardAccount,
-                wasLockingChainSend,
-                createCount,
-                dst);
-
-        auto const sig =
-            sign(signingPK_, signingSK_, ripple::makeSlice(toSign));
-        {
-            // TODO: Remove this test code
-            //
-            ripple::AttestationBatch::AttestationCreateAccount claim{
-                signingPK_,
-                sig,
-                sendingAccount,
-                sendingAmount,
-                rewardAmount,
-                rewardAccount,
-                wasLockingChainSend,
-                createCount,
-                dst};
-            assert(claim.verify(bridge));
-        }
-        return sig;
+        return ripple::AttestationBatch::AttestationCreateAccount{
+            e.bridge_,
+            signingPK_,
+            signingSK_,
+            e.src_,
+            *e.deliveredAmt_,
+            e.rewardAmt_,
+            rewardAccount,
+            e.dir_ == ChainDir::lockingToIssuing,
+            e.createCount_,
+            dst};
     }();
+
+    assert(!createOpt || createOpt->verify(e.bridge_));
 
     {
         auto session = app_.getXChainTxnDB().checkoutDb();
@@ -432,7 +392,7 @@ Federator::onEvent(event::XChainAccountCreateCommitDetected const& e)
         convert(e.rewardAmt_, rewardAmtBlob);
 
         soci::blob bridgeBlob(*session);
-        convert(sidechain_, bridgeBlob);
+        convert(bridge_, bridgeBlob);
 
         soci::blob sendingAccountBlob(*session);
         // Convert to an AccountID first, because if the type changes we want to
@@ -447,9 +407,9 @@ Federator::onEvent(event::XChainAccountCreateCommitDetected const& e)
         convert(signingPK_, publicKeyBlob);
 
         soci::blob signatureBlob(*session);
-        if (sigOpt)
+        if (createOpt)
         {
-            convert(*sigOpt, signatureBlob);
+            convert(createOpt->signature, signatureBlob);
         }
 
         soci::blob otherChainDstBlob(*session);
@@ -497,6 +457,10 @@ Federator::onEvent(event::XChainAccountCreateCommitDetected const& e)
             soci::use(otherChainDstBlob), soci::use(publicKeyBlob),
             soci::use(signatureBlob);
     }
+    if (createOpt)
+    {
+        pushTxn(e.bridge_, *createOpt);
+    }
 }
 
 void
@@ -512,19 +476,153 @@ Federator::onEvent(event::HeartbeatTimer const& e)
 }
 
 void
+Federator::pushTxn(
+    ripple::STXChainBridge const& bridge,
+    ripple::AttestationBatch::AttestationClaim const& att)
+{
+    bool notify = false;
+    {
+        std::lock_guard l{txnsMutex_};
+        notify = txns_.empty();
+        ripple::STXChainAttestationBatch batch{bridge, &att, &att + 1};
+        txns_.push_back(batch);
+    }
+    if (notify)
+    {
+        std::lock_guard l(cvMutexes_[lt_event]);
+        cvs_[lt_event].notify_one();
+    }
+}
+
+void
+Federator::pushTxn(
+    ripple::STXChainBridge const& bridge,
+    ripple::AttestationBatch::AttestationCreateAccount const& att)
+{
+    bool notify = false;
+    {
+        std::lock_guard l{txnsMutex_};
+        notify = txns_.empty();
+        ripple::AttestationBatch::AttestationClaim const* np = nullptr;
+        ripple::STXChainAttestationBatch batch{bridge, np, np, &att, &att + 1};
+        txns_.push_back(batch);
+    }
+    if (notify)
+    {
+        std::lock_guard l(cvMutexes_[lt_event]);
+        cvs_[lt_event].notify_one();
+    }
+}
+
+void
+Federator::submitTxn(ripple::STXChainAttestationBatch const& batch)
+{
+    JLOGV(
+        j_.trace(),
+        "Submitting transaction",
+        ripple::jv("batch", batch.getJson(ripple::JsonOptions::none)));
+
+    if (batch.numAttestations() == 0)
+        return;
+
+    ChainType const dstChain = [&] {
+        if (auto const& claims = batch.claims(); !claims.empty())
+        {
+            return claims.begin()->wasLockingChainSend ? ChainType::issuing
+                                                       : ChainType::locking;
+        }
+        if (auto const& creates = batch.creates(); !creates.empty())
+        {
+            return creates.begin()->wasLockingChainSend ? ChainType::issuing
+                                                        : ChainType::locking;
+        }
+        assert(0);
+        return ChainType::issuing;
+    }();
+
+    if (!chains_[dstChain].txnSubmit_)
+    {
+        JLOG(j_.trace())
+            << "Cannot submit transaction without txnSubmit information";
+        return;
+    }
+    config::TxnSubmit const& txnSubmit = *chains_[dstChain].txnSubmit_;
+    if (!txnSubmit.shouldSubmit)
+    {
+        JLOG(j_.trace()) << "Not submitting txn because shouldSubmit is false";
+        return;
+    }
+    std::uint32_t const seq = [&] {
+        // TODO repalace this code. It's just a stand in that gets the seq
+        // number every time.
+        std::promise<Json::Value> promise;
+        std::future<Json::Value> future = promise.get_future();
+        auto callback = [&promise](Json::Value const& v) {
+            promise.set_value(v);
+        };
+        Json::Value request;
+        request[ripple::jss::account] =
+            ripple::toBase58(txnSubmit.submittingAccount);
+        request[ripple::jss::ledger_index] = "validated";
+        chains_[dstChain].listener_->send("account_info", request, callback);
+        Json::Value const accountInfo = future.get();
+        JLOGV(
+            j_.trace(),
+            "txn submit account info",
+            ripple::jv("accountInfo", accountInfo));
+        if (accountInfo.isMember("account_data"))
+        {
+            auto const ad = accountInfo["account_data"];
+            if (ad.isMember("Sequence"))
+            {
+                return ad["Sequence"].asUInt();
+            }
+        }
+        throw std::runtime_error("Could not find sequence number");
+    }();
+
+    // TODO: decide on fee
+    ripple::XRPAmount fee{100};
+    ripple::STTx const toSubmit = txn::getSignedTxn(
+        txnSubmit.submittingAccount,
+        batch,
+        seq,
+        fee,
+        txnSubmit.publicKey,
+        txnSubmit.signingKey,
+        j_);
+
+    Json::Value const request = [&] {
+        Json::Value r;
+        // TODO add failHard?
+        r[ripple::jss::tx_blob] =
+            ripple::strHex(toSubmit.getSerializer().peekData());
+        return r;
+    }();
+
+    // TODO: Save the id and listen for errors
+    auto const id = chains_[dstChain].listener_->send("submit", request);
+    JLOGV(j_.trace(), "txn submit message id", ripple::jv("id", id));
+}
+
+void
 Federator::unlockMainLoop()
 {
-    std::lock_guard<std::mutex> l(mainLoopMutex_);
-    mainLoopLocked_ = false;
-    mainLoopCv_.notify_one();
+    for (int i = 0; i < lt_last; ++i)
+    {
+        std::lock_guard l(loopMutexes_[i]);
+        loopLocked_[i] = false;
+        loopCvs_[i].notify_one();
+    }
 }
 
 void
 Federator::mainLoop()
 {
+    auto const lt = lt_event;
     {
-        std::unique_lock l{mainLoopMutex_};
-        mainLoopCv_.wait(l, [this] { return !mainLoopLocked_; });
+        std::unique_lock l{loopMutexes_[lt]};
+        loopCvs_[lt].wait(l, [this] { return !loopLocked_[lt]; });
     }
 
     std::vector<FederatorEvent> localEvents;
@@ -542,10 +640,10 @@ Federator::mainLoop()
             // In rare cases, an event may be pushed and the condition
             // variable signaled before the condition variable is waited on.
             // To handle this, set a timeout on the wait.
-            std::unique_lock l{m_};
+            std::unique_lock l{cvMutexes_[lt]};
             // Allow for spurious wakeups. The alternative requires locking the
             // eventsMutex_
-            cv_.wait_for(l, 1s);
+            cvs_[lt].wait_for(l, 1s);
             continue;
         }
 
@@ -555,10 +653,51 @@ Federator::mainLoop()
     }
 }
 
+void
+Federator::txnSubmitLoop()
+{
+    auto const lt = lt_txnSubmit;
+    {
+        std::unique_lock l{loopMutexes_[lt]};
+        loopCvs_[lt].wait(l, [this] { return !loopLocked_[lt]; });
+    }
+
+    std::vector<ripple::STXChainAttestationBatch> localTxns;
+    localTxns.reserve(16);
+    while (!requestStop_)
+    {
+        {
+            std::lock_guard l{txnsMutex_};
+            assert(localTxns.empty());
+            localTxns.swap(txns_);
+        }
+        if (localTxns.empty())
+        {
+            using namespace std::chrono_literals;
+            // In rare cases, an event may be pushed and the condition
+            // variable signaled before the condition variable is waited on.
+            // To handle this, set a timeout on the wait.
+            std::unique_lock l{cvMutexes_[lt]};
+            // Allow for spurious wakeups. The alternative requires locking the
+            // eventsMutex_
+            cvs_[lt].wait_for(l, 1s);
+            continue;
+        }
+
+        for (auto const& txn : localTxns)
+            submitTxn(txn);
+        localTxns.clear();
+    }
+}
+
 Json::Value
 Federator::getInfo() const
 {
     // TODO
+    // Get the events size
+    // Get the transactions size
+    // Track transactons per secons
+    // Track when last transaction or event was submitted
     Json::Value ret{Json::objectValue};
     return ret;
 }

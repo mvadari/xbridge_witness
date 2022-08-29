@@ -35,28 +35,6 @@ to_hex(std::uint64_t i)
     return fmt::format("{:016x}", i);
 }
 
-std::string const&
-to_string(Dir dir)
-{
-    switch (dir)
-    {
-        case Dir::lockingToIssuing: {
-            static std::string const r("locking");
-            return r;
-        }
-        case Dir::issuingToLocking: {
-            static std::string const r("issuing");
-            return r;
-        }
-    }
-
-    // Some compilers will warn about not returning from all control paths
-    // without this, but this code will never execute.
-    assert(0);
-    static std::string const error("error");
-    return error;
-}
-
 }  // namespace
 
 Json::Value

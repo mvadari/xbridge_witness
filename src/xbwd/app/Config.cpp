@@ -1,8 +1,10 @@
-#include "ripple/protocol/AccountID.h"
-#include "ripple/protocol/KeyType.h"
+#include "ripple/protocol/SecretKey.h"
 #include <xbwd/app/Config.h>
 
 #include <xbwd/rpc/fromJSON.h>
+
+#include <ripple/protocol/AccountID.h>
+#include <ripple/protocol/KeyType.h>
 
 namespace xbwd {
 namespace config {
@@ -28,13 +30,95 @@ keyTypeFromJson(Json::Value const& jv, char const* key)
 }
 }  // namespace
 
+std::optional<AdminConfig>
+AdminConfig::make(Json::Value const& jv)
+{
+    AdminConfig ac;
+
+    if (jv.isMember("Username") || jv.isMember("Password"))
+    {
+        // must have none or both of "Username" and "Password"
+        if (!jv.isMember("Username") || !jv.isMember("Password") ||
+            !jv["Username"].isString() || !jv["Password"].isString() ||
+            jv["Username"].asString().empty() ||
+            jv["Password"].asString().empty())
+        {
+            throw std::runtime_error("Admin config wrong format");
+        }
+
+        ac.pass.emplace(AdminConfig::PasswordAuth{
+            jv["Username"].asString(), jv["Password"].asString()});
+    }
+    // may throw while parsing IPs or Subnets
+    if (jv.isMember("IPs") && jv["IPs"].isArray())
+    {
+        for (auto const& s : jv["IPs"])
+        {
+            ac.addresses.emplace(boost::asio::ip::make_address(s.asString()));
+        }
+    }
+    if (jv.isMember("Subnets") && jv["Subnets"].isArray())
+    {
+        for (auto const& s : jv["Subnets"])
+        {
+            // First, see if it's an ipv4 subnet. If not, try ipv6.
+            // If that throws, then there's nothing we can do with
+            // the entry.
+            try
+            {
+                ac.netsV4.emplace_back(
+                    boost::asio::ip::make_network_v4(s.asString()));
+            }
+            catch (boost::system::system_error const&)
+            {
+                ac.netsV6.emplace_back(
+                    boost::asio::ip::make_network_v6(s.asString()));
+            }
+        }
+    }
+
+    if (ac.pass || !ac.addresses.empty() || !ac.netsV4.empty() ||
+        !ac.netsV6.empty())
+    {
+        return std::optional<AdminConfig>{ac};
+    }
+    else
+    {
+        throw std::runtime_error("Admin config wrong format:" + jv.asString());
+    }
+}
+
+TxnSubmit::TxnSubmit(Json::Value const& jv)
+    : keyType{keyTypeFromJson(jv, "SigningKeyKeyType")}
+    , signingKey{ripple::generateSecretKey(
+          keyType,
+          rpc::fromJson<ripple::Seed>(jv, "SigningKeySeed"))}
+    , publicKey{ripple::derivePublicKey(keyType, signingKey)}
+    , submittingAccount{
+          rpc::fromJson<ripple::AccountID>(jv, "SubmittingAccount")}
+{
+    if (jv.isMember("ShouldSubmit"))
+    {
+        if (jv["ShouldSubmit"].isBool())
+            shouldSubmit = jv["ShouldSubmit"].asBool();
+        else
+            throw std::runtime_error("WitnessSubmit config wrong format");
+    }
+}
+
+ChainConfig::ChainConfig(Json::Value const& jv)
+    : chainIp{rpc::fromJson<beast::IP::Endpoint>(jv, "Endpoint")}
+    , rewardAccount{rpc::fromJson<ripple::AccountID>(jv, "RewardAccount")}
+{
+    if (jv.isMember("TxnSubmit"))
+    {
+        txnSubmit.emplace(jv["TxnSubmit"]);
+    }
+}
+
 Config::Config(Json::Value const& jv)
-    : lockingchainIp{rpc::fromJson<beast::IP::Endpoint>(
-          jv,
-          "LockingChainEndpoint")}
-    , issuingchainIp{rpc::fromJson<beast::IP::Endpoint>(
-          jv,
-          "IssuingChainEndpoint")}
+    : lockingChainConfig(jv["LockingChain"])
+    , issuingChainConfig(jv["IssuingChain"])
     , rpcEndpoint{rpc::fromJson<beast::IP::Endpoint>(jv, "RPCEndpoint")}
     , dataDir{rpc::fromJson<boost::filesystem::path>(jv, "DBDir")}
     , keyType{keyTypeFromJson(jv, "SigningKeyKeyType")}
@@ -42,77 +126,9 @@ Config::Config(Json::Value const& jv)
           keyType,
           rpc::fromJson<ripple::Seed>(jv, "SigningKeySeed"))}
     , bridge{rpc::fromJson<ripple::STXChainBridge>(jv, "XChainBridge")}
-    , lockingChainRewardAccount{rpc::fromJson<ripple::AccountID>(
-          jv,
-          "LockingChainRewardAccount")}
-    , issuingChainRewardAccount{
-          rpc::fromJson<ripple::AccountID>(jv, "IssuingChainRewardAccount")}
+    , adminConfig{
+          jv.isMember("Admin") ? AdminConfig::make(jv["Admin"]) : std::nullopt}
 {
-    if (jv.isMember("Admin"))
-    {
-        auto const& admin = jv["Admin"];
-        adminConf = [&]() -> std::optional<AdminConfig> {
-            AdminConfig ac;
-            if (admin.isMember("Username") || admin.isMember("Password"))
-            {
-                // must have none or both of "Username" and "Password"
-                if (!admin.isMember("Username") ||
-                    !admin.isMember("Password") ||
-                    !admin["Username"].isString() ||
-                    !admin["Password"].isString() ||
-                    admin["Username"].asString().empty() ||
-                    admin["Password"].asString().empty())
-                {
-                    throw std::runtime_error(
-                        "Admin config wrong format:" +
-                        admin.asString());
-                }
-
-                ac.pass.emplace(AdminConfig::PasswordAuth{
-                    admin["Username"].asString(),
-                    admin["Password"].asString()});
-            }
-            // may throw while parsing IPs or Subnets
-            if (admin.isMember("IPs") && admin["IPs"].isArray())
-            {
-                for (auto const& s : admin["IPs"])
-                {
-                    ac.addresses.emplace(
-                        boost::asio::ip::make_address(s.asString()));
-                }
-            }
-            if (admin.isMember("Subnets") && admin["Subnets"].isArray())
-            {
-                for (auto const& s : admin["Subnets"])
-                {
-                    // First, see if it's an ipv4 subnet. If not, try ipv6.
-                    // If that throws, then there's nothing we can do with
-                    // the entry.
-                    try
-                    {
-                        ac.netsV4.emplace_back(
-                            boost::asio::ip::make_network_v4(s.asString()));
-                    }
-                    catch (boost::system::system_error const&)
-                    {
-                        ac.netsV6.emplace_back(
-                            boost::asio::ip::make_network_v6(s.asString()));
-                    }
-                }
-            }
-
-            if (ac.pass || !ac.addresses.empty() || !ac.netsV4.empty() ||
-                !ac.netsV6.empty())
-            {
-                return std::optional<AdminConfig>{ac};
-            }
-            else
-            {
-                throw std::runtime_error(
-                    "Admin config wrong format:" + admin.asString());
-            }
-        }();
-    }
 }
 
 }  // namespace config

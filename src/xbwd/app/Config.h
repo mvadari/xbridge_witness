@@ -3,6 +3,8 @@
 #include <ripple/beast/net/IPEndpoint.h>
 #include <ripple/json/json_value.h>
 #include <ripple/protocol/AccountID.h>
+#include <ripple/protocol/KeyType.h>
+#include <ripple/protocol/PublicKey.h>
 #include <ripple/protocol/STXChainBridge.h>
 #include <ripple/protocol/SecretKey.h>
 
@@ -11,7 +13,6 @@
 #include <boost/asio/ip/network_v6.hpp>
 #include <boost/filesystem.hpp>
 
-#include "ripple/protocol/KeyType.h"
 #include <string>
 
 namespace xbwd {
@@ -32,21 +33,41 @@ struct AdminConfig
     // If the pass is set, it will be checked in addition to address
     // verification, if any.
     std::optional<PasswordAuth> pass;
+
+    static std::optional<AdminConfig>
+    make(Json::Value const& jv);
+};
+
+struct TxnSubmit
+{
+    ripple::KeyType keyType;
+    ripple::SecretKey signingKey;
+    ripple::PublicKey publicKey;
+    ripple::AccountID submittingAccount;
+    bool shouldSubmit{true};
+
+    explicit TxnSubmit(Json::Value const& jv);
+};
+
+struct ChainConfig
+{
+    beast::IP::Endpoint chainIp;
+    ripple::AccountID rewardAccount;
+    std::optional<TxnSubmit> txnSubmit;
+    explicit ChainConfig(Json::Value const& jv);
 };
 
 struct Config
 {
 public:
-    beast::IP::Endpoint lockingchainIp;
-    beast::IP::Endpoint issuingchainIp;
+    ChainConfig lockingChainConfig;
+    ChainConfig issuingChainConfig;
     beast::IP::Endpoint rpcEndpoint;
     boost::filesystem::path dataDir;
     ripple::KeyType keyType;
     ripple::SecretKey signingKey;
     ripple::STXChainBridge bridge;
-    ripple::AccountID lockingChainRewardAccount;
-    ripple::AccountID issuingChainRewardAccount;
-    std::optional<AdminConfig> adminConf;
+    std::optional<AdminConfig> adminConfig;
 
     explicit Config(Json::Value const& jv);
 };

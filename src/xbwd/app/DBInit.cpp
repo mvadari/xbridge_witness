@@ -13,30 +13,26 @@ xChainDBName()
 }
 
 std::string const&
-xChainLockingToIssuingTableName()
+xChainTableName(ChainDir dir)
 {
-    static std::string const r{"XChainTxnLockingToIssuing"};
-    return r;
-}
-
-std::string const&
-xChainCreateAccountLockingTableName()
-{
-    static std::string const r{"XChainTxnCreateAccountLocking"};
-    return r;
-}
-
-std::string const&
-xChainCreateAccountIssuingTableName()
-{
-    static std::string const r{"XChainTxnCreateAccountIssuing"};
-    return r;
-}
-
-std::string const&
-xChainIssuingToLockingTableName()
-{
+    if (dir == ChainDir::lockingToIssuing)
+    {
+        static std::string const r{"XChainTxnLockingToIssuing"};
+        return r;
+    }
     static std::string const r{"XChainTxnIssuingToLocking"};
+    return r;
+}
+
+std::string const&
+xChainCreateAccountTableName(ChainDir dir)
+{
+    if (dir == ChainDir::lockingToIssuing)
+    {
+        static std::string const r{"XChainTxnCreateAccountLocking"};
+        return r;
+    }
+    static std::string const r{"XChainTxnCreateAccountIssuing"};
     return r;
 }
 
@@ -100,33 +96,20 @@ xChainDBInit()
             CREATE INDEX IF NOT EXISTS {table_name}CreateCountIdx ON {table_name}(CreateCount);",
         )sql";
 
-        r.push_back(fmt::format(
-            tblFmtStr,
-            fmt::arg("table_name", xChainLockingToIssuingTableName())));
-        r.push_back(fmt::format(
-            idxFmtStr,
-            fmt::arg("table_name", xChainLockingToIssuingTableName())));
+        for (auto cd : {ChainDir::lockingToIssuing, ChainDir::issuingToLocking})
+        {
+            r.push_back(fmt::format(
+                tblFmtStr, fmt::arg("table_name", xChainTableName(cd))));
+            r.push_back(fmt::format(
+                idxFmtStr, fmt::arg("table_name", xChainTableName(cd))));
 
-        r.push_back(fmt::format(
-            tblFmtStr,
-            fmt::arg("table_name", xChainIssuingToLockingTableName())));
-        r.push_back(fmt::format(
-            idxFmtStr,
-            fmt::arg("table_name", xChainIssuingToLockingTableName())));
-
-        r.push_back(fmt::format(
-            createAccTblFmtStr,
-            fmt::arg("table_name", xChainCreateAccountLockingTableName())));
-        r.push_back(fmt::format(
-            createAccIdxFmtStr,
-            fmt::arg("table_name", xChainCreateAccountLockingTableName())));
-
-        r.push_back(fmt::format(
-            createAccTblFmtStr,
-            fmt::arg("table_name", xChainCreateAccountIssuingTableName())));
-        r.push_back(fmt::format(
-            createAccIdxFmtStr,
-            fmt::arg("table_name", xChainCreateAccountIssuingTableName())));
+            r.push_back(fmt::format(
+                createAccTblFmtStr,
+                fmt::arg("table_name", xChainCreateAccountTableName(cd))));
+            r.push_back(fmt::format(
+                createAccIdxFmtStr,
+                fmt::arg("table_name", xChainCreateAccountTableName(cd))));
+        }
 
         r.push_back("END TRANSACTION;");
         return r;

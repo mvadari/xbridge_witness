@@ -19,6 +19,8 @@
 */
 //==============================================================================
 
+#include <xbwd/basics/ChainTypes.h>
+
 #include <ripple/json/json_value.h>
 #include <ripple/protocol/AccountID.h>
 #include <ripple/protocol/STAmount.h>
@@ -31,12 +33,10 @@
 namespace xbwd {
 namespace event {
 
-enum class Dir { issuingToLocking, lockingToIssuing };
-
 // A cross chain transfer was detected on this federator
 struct XChainCommitDetected
 {
-    Dir dir_;
+    ChainDir dir_;
     // Src account on the src chain
     ripple::AccountID src_;
     ripple::STXChainBridge bridge_;
@@ -48,6 +48,7 @@ struct XChainCommitDetected
     ripple::uint256 txnHash_;
     ripple::TER status_;
     std::int32_t rpcOrder_;
+    bool ledgerBoundary_;
 
     Json::Value
     toJson() const;
@@ -56,7 +57,7 @@ struct XChainCommitDetected
 // A cross chain account create was detected on this federator
 struct XChainAccountCreateCommitDetected
 {
-    Dir dir_;
+    ChainDir dir_;
     // Src account on the src chain
     ripple::AccountID src_;
     ripple::STXChainBridge bridge_;
@@ -69,6 +70,7 @@ struct XChainAccountCreateCommitDetected
     ripple::uint256 txnHash_;
     ripple::TER status_;
     std::int32_t rpcOrder_;
+    bool ledgerBoundary_;
 
     Json::Value
     toJson() const;
@@ -86,7 +88,7 @@ struct XChainTransferResult
     // I.e. A "mainToSide" transfer result is a transaction that
     // happens on the sidechain (the triggering transaction happended on the
     // mainchain)
-    Dir dir_;
+    ChainDir dir_;
     ripple::AccountID dst_;
     std::optional<ripple::STAmount> deliveredAmt_;
     std::uint64_t claimID_;

@@ -1,13 +1,13 @@
 #pragma once
 
-#include "ripple/protocol/KeyType.h"
-#include "ripple/protocol/STXChainBridge.h"
 #include <xbwd/app/Config.h>
 #include <xbwd/core/DatabaseCon.h>
 #include <xbwd/rpc/ServerHandler.h>
 
 #include <ripple/beast/utility/Journal.h>
+#include <ripple/protocol/KeyType.h>
 #include <ripple/protocol/PublicKey.h>
+#include <ripple/protocol/STXChainBridge.h>
 #include <ripple/protocol/SecretKey.h>
 #include <ripple/protocol/TER.h>
 
@@ -69,7 +69,6 @@ public:
         std::unique_ptr<config::Config> config,
         beast::severities::Severity logLevel);
 
-
     bool
     setup();
 
@@ -87,7 +86,6 @@ public:
 
     DatabaseCon&
     getXChainTxnDB();
-
 
     config::Config&
     config();

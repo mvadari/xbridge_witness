@@ -1,5 +1,3 @@
-#include "ripple/protocol/SField.h"
-#include <soci/soci-backend.h>
 #include <xbwd/rpc/RPCHandler.h>
 
 #include <xbwd/app/App.h>
@@ -8,6 +6,7 @@
 
 #include <ripple/json/json_value.h>
 #include <ripple/protocol/AccountID.h>
+#include <ripple/protocol/SField.h>
 #include <ripple/protocol/STArray.h>
 #include <ripple/protocol/STBase.h>
 #include <ripple/protocol/STObject.h>
@@ -15,6 +14,7 @@
 #include <ripple/protocol/jss.h>
 
 #include <fmt/core.h>
+#include <soci/soci-backend.h>
 
 #include <functional>
 #include <unordered_map>
@@ -49,7 +49,7 @@ doSelectAll(
     App& app,
     Json::Value const& in,
     Json::Value& result,
-    bool const wasLockingChainSend)
+    ChainDir const chainDir)
 
 {
     // TODO: Remove me
@@ -57,9 +57,7 @@ doSelectAll(
 
     result["request"] = in;
 
-    auto const& tblName = wasLockingChainSend
-        ? db_init::xChainLockingToIssuingTableName()
-        : db_init::xChainIssuingToLockingTableName();
+    auto const& tblName = db_init::xChainTableName(chainDir);
 
     {
         auto session = app.getXChainTxnDB().checkoutDb();
@@ -142,7 +140,7 @@ doSelectAll(
                 sendingAccount,
                 sendingAmount,
                 rewardAccount,
-                wasLockingChainSend,
+                chainDir == ChainDir::lockingToIssuing,
                 claimID,
                 optDst);
         }
@@ -157,13 +155,13 @@ doSelectAll(
 void
 doSelectAllLocking(App& app, Json::Value const& in, Json::Value& result)
 {
-    return doSelectAll(app, in, result, /*wasLockingSend*/ true);
+    return doSelectAll(app, in, result, ChainDir::lockingToIssuing);
 }
 
 void
 doSelectAllIssuing(App& app, Json::Value const& in, Json::Value& result)
 {
-    return doSelectAll(app, in, result, /*wasLockingSend*/ false);
+    return doSelectAll(app, in, result, ChainDir::issuingToLocking);
 }
 
 void
@@ -205,9 +203,12 @@ doWitness(App& app, Json::Value const& in, Json::Value& result)
     auto const& sendingAmount = *optAmt;
     auto const& claimID = *optClaimID;
 
-    bool const wasLockingChainSend =
-        (*optDoor == optBridge->lockingChainDoor());
-    if (!wasLockingChainSend && *optDoor != optBridge->issuingChainDoor())
+    ChainDir const chainDir = (*optDoor == optBridge->lockingChainDoor())
+        ? ChainDir::lockingToIssuing
+        : ChainDir::issuingToLocking;
+
+    if (chainDir == ChainDir::issuingToLocking &&
+        *optDoor != optBridge->issuingChainDoor())
     {
         // TODO: Write log message
         // put expected value in the error message?
@@ -217,9 +218,7 @@ doWitness(App& app, Json::Value const& in, Json::Value& result)
         return;
     }
 
-    auto const& tblName = wasLockingChainSend
-        ? db_init::xChainLockingToIssuingTableName()
-        : db_init::xChainIssuingToLockingTableName();
+    auto const& tblName = db_init::xChainTableName(chainDir);
 
     {
         auto session = app.getXChainTxnDB().checkoutDb();
@@ -299,7 +298,7 @@ doWitness(App& app, Json::Value const& in, Json::Value& result)
                 sendingAccount,
                 sendingAmount,
                 rewardAccount,
-                wasLockingChainSend,
+                chainDir == ChainDir::lockingToIssuing,
                 claimID,
                 optDst};
 
@@ -365,9 +364,11 @@ doWitnessAccountCreate(App& app, Json::Value const& in, Json::Value& result)
     auto const& createCount = *optCreateCount;
     auto const& dst = *optDst;
 
-    bool const wasLockingChainSend =
-        (*optDoor == optBridge->lockingChainDoor());
-    if (!wasLockingChainSend && *optDoor != optBridge->issuingChainDoor())
+    ChainDir const chainDir = (*optDoor == optBridge->lockingChainDoor())
+        ? ChainDir::lockingToIssuing
+        : ChainDir::issuingToLocking;
+    if (chainDir == ChainDir::issuingToLocking &&
+        *optDoor != optBridge->issuingChainDoor())
     {
         // TODO: Write log message
         // put expected value in the error message?
@@ -377,9 +378,7 @@ doWitnessAccountCreate(App& app, Json::Value const& in, Json::Value& result)
         return;
     }
 
-    auto const& tblName = wasLockingChainSend
-        ? db_init::xChainCreateAccountLockingTableName()
-        : db_init::xChainCreateAccountIssuingTableName();
+    auto const& tblName = db_init::xChainCreateAccountTableName(chainDir);
 
     std::vector<std::uint8_t> const encodedBridge = [&] {
         ripple::Serializer s;
@@ -454,7 +453,7 @@ doWitnessAccountCreate(App& app, Json::Value const& in, Json::Value& result)
                 sendingAmount,
                 rewardAmount,
                 rewardAccount,
-                wasLockingChainSend,
+                chainDir == ChainDir::lockingToIssuing,
                 createCount,
                 dst};
 
@@ -585,7 +584,7 @@ doCommand(
     }
 
     if (it->second.role == Role::ADMIN &&
-        !isAdmin(app.config().adminConf, in, remoteIPAddress.address()))
+        !isAdmin(app.config().adminConfig, in, remoteIPAddress.address()))
     {
         result["error"] =
             fmt::format("{} method requires ADMIN privilege.", cmd);

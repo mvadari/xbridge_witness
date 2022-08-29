@@ -1,6 +1,3 @@
-#include "ripple/protocol/SecretKey.h"
-#include "ripple/protocol/TER.h"
-#include "xbwd/rpc/ServerHandler.h"
 #include <xbwd/app/App.h>
 
 #include <xbwd/app/BuildInfo.h>
@@ -12,6 +9,8 @@
 #include <ripple/protocol/STAmount.h>
 #include <ripple/protocol/STXChainBridge.h>
 #include <ripple/protocol/STXChainClaimProof.h>
+#include <ripple/protocol/SecretKey.h>
+#include <ripple/protocol/TER.h>
 
 namespace xbwd {
 
@@ -57,16 +56,7 @@ App::App(
     try
     {
         federator_ = make_Federator(
-            *this,
-            get_io_service(),
-            config_->bridge,
-            config_->keyType,
-            config_->signingKey,
-            config_->lockingchainIp,
-            config_->issuingchainIp,
-            config_->lockingChainRewardAccount,
-            config_->issuingChainRewardAccount,
-            logs_.journal("Federator"));
+            *this, get_io_service(), *config_, logs_.journal("Federator"));
 
         serverHandler_ = std::make_unique<rpc::ServerHandler>(
             *this, get_io_service(), logs_.journal("ServerHandler"));
@@ -166,7 +156,6 @@ App::getXChainTxnDB()
 {
     return xChainTxnDB_;
 }
-
 
 void
 App::signalStop()

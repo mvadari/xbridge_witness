@@ -296,6 +296,18 @@ class App:
         self.key_manager.add(account)
         return account
 
+    def create_account_from_seed(self, name: str, seed, key_type) -> Account:
+        """ Create an account. Use the name as the alias. """
+        if name == "root":
+            return
+        assert not self.key_manager.is_alias(name)
+
+        account = Account(
+            nickname=name, result_dict=self(WalletPropose(seed=seed, key_type=key_type))
+        )
+        self.key_manager.add(account)
+        return account
+
     def create_accounts(
         self,
         names: List[str],

@@ -17,24 +17,23 @@
 */
 //==============================================================================
 
-#include "ripple/basics/Slice.h"
-#include "ripple/protocol/PublicKey.h"
-#include "ripple/protocol/SField.h"
-#include "ripple/protocol/Serializer.h"
 #if defined(__clang__)
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated"
 #endif
 
 #include <ripple/basics/ByteUtilities.h>
+#include <ripple/basics/Slice.h>
 #include <ripple/basics/contract.h>
 #include <ripple/core/Config.h>
 #include <ripple/core/ConfigSections.h>
 #include <ripple/core/DatabaseCon.h>
 #include <ripple/core/SociDB.h>
 #include <ripple/protocol/PublicKey.h>
+#include <ripple/protocol/SField.h>
 #include <ripple/protocol/STAmount.h>
 #include <ripple/protocol/STXChainBridge.h>
+#include <ripple/protocol/Serializer.h>
 
 #include <boost/filesystem.hpp>
 

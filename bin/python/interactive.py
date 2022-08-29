@@ -11,7 +11,7 @@ from typing import Callable, Dict, List, Optional, Union
 
 from app import App, balances_dataframe
 from command import AccountTx, Subscribe
-from common import Account, Asset, XRP, Bridge, XChainClaimProof, eprint
+from common import Account, Asset, XRP, drops, Bridge, XChainClaimProof, eprint
 from transaction import (
     SetHook,
     Payment,
@@ -915,6 +915,64 @@ class BridgeRepl(cmd.Cmd):
         )
 
     # new_account
+    ##################
+
+    ##################
+    # wallet_propose
+    def do_wallet_propose(self, line):
+        args = line.split()
+        if len(args) != 4:
+            print(
+                f'Error: wallet_propose command takes exactly four arguments. Type "help" for help.'
+            )
+            return
+
+        chain = None
+
+        if args[0] not in ["mainchain", "sidechain"]:
+            print(f'Error: The first argument must be "mainchain" or "sidechain".')
+            return
+
+        if args[0] == "mainchain":
+            chain = self.mc_app
+        else:
+            chain = self.sc_app
+        args.pop(0)
+
+        alias = args[0]
+        if chain.is_alias(alias):
+            print(f"Error: The alias {alias} already exists.")
+            return
+        args.pop(0)
+
+        seed = args[0]
+        args.pop(0)
+
+        key_type = args[0]
+        args.pop(0)
+        if key_type not in ["ed25519", "secp256k1"]:
+            print(f"Invalid keytype: {key_type}. Must be either ed25519 or secp256k1")
+
+        assert not args
+        chain.create_account_from_seed(alias, seed, key_type)
+
+    def complete_wallet_propose(self, text, line, begidx, endidx):
+        arg_num = len(line.split())
+        if arg_num == 2:  # chain
+            return self._complete_chain(text, line)
+        return []
+
+    def help_wallet_propose(self):
+        print(
+            "\n".join(
+                [
+                    "wallet_propose (mainchain | sidechain) alias seed key_type",
+                    "Add a new account to the address book using a seed",
+                ]
+            )
+        )
+
+    # wallet_propose
     ##################
 
     ##################
@@ -1840,7 +1898,7 @@ class BridgeRepl(cmd.Cmd):
 
     def do_xchain_claimid_create(self, line):
         args = line.split()
-        if not (5<=len(args) <=6):
+        if not (5 <= len(args) <= 6):
             print(
                 f'Error: xchain_claimid_create takes five or six arguments. Type "help" for help.'
             )
@@ -1910,14 +1968,15 @@ class BridgeRepl(cmd.Cmd):
 
         assert not args
 
-        chain(
+        r = chain(
             XChainCreateClaimID(
                 account=src_account,
                 other_chain_account=other_chain_account,
                 bridge=bridge,
-                reward=XRP(reward_amt_value),
+                reward=drops(reward_amt_value),
             )
         )
+        print(f"{r}")
         chain.maybe_ledger_accept()
 
     def complete_xchain_claimid_create(self, text, line, begidx, endidx):
@@ -1957,14 +2016,14 @@ class BridgeRepl(cmd.Cmd):
     def do_xchain_commit(self, line):
         try:
             args = line.split()
-            if len(args) < 5:
+            if len(args) < 6:
                 print(
-                    f'Error: xchain_commit takes at least five arguments. Type "help" for help.'
+                    f'Error: xchain_commit takes at least six arguments. Type "help" for help.'
                 )
                 return
-            if len(args) > 6:
+            if len(args) > 7:
                 print(
-                    f'Error: xchain_commit takes at most six arguments. Type "help" for help.'
+                    f'Error: xchain_commit takes at most seven arguments. Type "help" for help.'
                 )
                 return
 
@@ -1987,8 +2046,10 @@ class BridgeRepl(cmd.Cmd):
 
             if args[0] == "mainchain":
                 chain = self.mc_app
+                other_chain = self.sc_app
             else:
                 chain = self.sc_app
+                other_chain = self.mc_app
             args.pop(0)
 
             nickname = args[0]
@@ -1996,6 +2057,16 @@ class BridgeRepl(cmd.Cmd):
                 print(f"Error: {nickname} is not in the address book")
                 return
             src_account = chain.account_from_alias(nickname)
+            args.pop(0)
+
+            nickname = args[0]
+            if nickname == "None":
+                dst_account = None
+            else:
+                if not other_chain.is_alias(nickname):
+                    print(f"Error: {nickname} is not in the address book")
+                    return
+                dst_account = other_chain.account_from_alias(nickname)
             args.pop(0)
 
             bridge_alias = args[0]
@@ -2050,6 +2121,7 @@ class BridgeRepl(cmd.Cmd):
                     bridge=bridge,
                     claimID=claim_id,
                     amount=amt,
+                    dst=dst_account,
                 )
             )
             chain.maybe_ledger_accept()
@@ -2067,15 +2139,19 @@ class BridgeRepl(cmd.Cmd):
             arg_num += 1
         if arg_num == 2:  # chain
             return self._complete_chain(text, line)
-        elif arg_num == 3:  # account
+        elif arg_num == 3:  # src account
             return self._complete_account(text, line, chain_name=args[1])
-        elif arg_num == 4:  # sidechain
+        elif arg_num == 4:  # dst account
+            return self._complete_account(
+                text, line, chain_name=_other_chain_name(args[1])
+            )
+        elif arg_num == 5:  # bridge
             return self._complete_bridge_alias(text, line, chain_name=args[1])
-        elif arg_num == 5:  # xchain_seqnum
+        elif arg_num == 6:  # xchain_seqnum
             return []
-        elif arg_num == 6:  # amount
+        elif arg_num == 7:  # amount
             return []
-        elif arg_num == 7:  # drops or xrp or asset
+        elif arg_num == 8:  # drops or xrp or asset
             return self._complete_unit(text, line) + self._complete_asset(
                 text, line, chain_name=args[1]
             )
@@ -2195,10 +2271,10 @@ class BridgeRepl(cmd.Cmd):
             chain(
                 XChainAccountCreate(
                     account=src_account,
-                    dst = dst_account,
+                    dst=dst_account,
                     bridge=bridge,
                     amount=amt,
-                    signature_reward = reward_amt,
+                    signature_reward=reward_amt,
                 )
             )
             chain.maybe_ledger_accept()
@@ -2219,7 +2295,9 @@ class BridgeRepl(cmd.Cmd):
         elif arg_num == 3:  # src account
             return self._complete_account(text, line, chain_name=args[1])
         elif arg_num == 4:  # dst account
-            return self._complete_account(text, line, chain_name=_other_chain_name(args[1]))
+            return self._complete_account(
+                text, line, chain_name=_other_chain_name(args[1])
+            )
         elif arg_num == 4:  # sidechain
             return self._complete_bridge_alias(text, line, chain_name=args[1])
         elif arg_num == 6:  # amount
@@ -2228,7 +2306,8 @@ class BridgeRepl(cmd.Cmd):
             return []
         elif arg_num == 8:  # drops or xrp or asset
             return self._complete_unit(text, line) + self._complete_asset(
-                text, line, chain_name=args[1])
+                text, line, chain_name=args[1]
+            )
         return []
 
     def help_xchain_account_create(self):
@@ -2423,6 +2502,7 @@ class BridgeRepl(cmd.Cmd):
 
     # EOF
     ##################
+
 
 def repl(mc_app: App, sc_app: App):
     BridgeRepl(mc_app, sc_app).cmdloop()

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <xbwd/basics/ChainTypes.h>
+
 #include <array>
 #include <cstdint>
 #include <string>
@@ -9,21 +11,14 @@
 namespace xbwd {
 namespace db_init {
 
-// Ledger database holds ledgers and ledger confirmations
 std::string const&
 xChainDBName();
 
 std::string const&
-xChainLockingToIssuingTableName();
+xChainTableName(ChainDir dir);
 
 std::string const&
-xChainIssuingToLockingTableName();
-
-std::string const&
-xChainCreateAccountLockingTableName();
-
-std::string const&
-xChainCreateAccountIssuingTableName();
+xChainCreateAccountTableName(ChainDir dir);
 
 std::vector<std::string> const&
 xChainDBPragma();
