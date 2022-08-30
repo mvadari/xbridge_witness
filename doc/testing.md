@@ -32,7 +32,7 @@ The attestation server uses a json config file. Here's an example:
   },
   "DBDir": "/home/swd/data/witness/witness0/db",
   "SigningKeySeed": "snwitEjg9Mr8n65cnqhATKcd1dQmv",
-  "SigningKeyKeyType": "ed25519",
+  "SigningKeyType": "ed25519",
   "LockingChainRewardAccount": "rhWQzvdmhf5vFS35vtKUSUwNZHGT53qQsg",
   "IssuingChainRewardAccount": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
   "XChainBridge": {

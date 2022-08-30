@@ -346,7 +346,7 @@ def setup_mainchain(mc_app: App, params: Params, setup_user_accounts: bool = Tru
         account_id_from_secret(
             app=mc_app,
             key=wc["SigningKeySeed"],
-            key_type=wc["SigningKeyKeyType"],
+            key_type=wc["SigningKeyType"],
         )
         for wc in params.witness_configs
     ]
@@ -393,7 +393,7 @@ def setup_sidechain(sc_app: App, params: Params, setup_user_accounts: bool = Tru
         account_id_from_secret(
             app=sc_app,
             key=wc["SigningKeySeed"],
-            key_type=wc["SigningKeyKeyType"],
+            key_type=wc["SigningKeyType"],
         )
         for wc in params.witness_configs
     ]
