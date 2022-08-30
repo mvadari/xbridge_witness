@@ -89,7 +89,7 @@ AdminConfig::make(Json::Value const& jv)
 }
 
 TxnSubmit::TxnSubmit(Json::Value const& jv)
-    : keyType{keyTypeFromJson(jv, "SigningKeyKeyType")}
+    : keyType{keyTypeFromJson(jv, "SigningKeyType")}
     , signingKey{ripple::generateSecretKey(
           keyType,
           rpc::fromJson<ripple::Seed>(jv, "SigningKeySeed"))}
