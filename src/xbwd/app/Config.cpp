@@ -121,7 +121,7 @@ Config::Config(Json::Value const& jv)
     , issuingChainConfig(jv["IssuingChain"])
     , rpcEndpoint{rpc::fromJson<beast::IP::Endpoint>(jv, "RPCEndpoint")}
     , dataDir{rpc::fromJson<boost::filesystem::path>(jv, "DBDir")}
-    , keyType{keyTypeFromJson(jv, "SigningKeyKeyType")}
+    , keyType{keyTypeFromJson(jv, "SigningKeyType")}
     , signingKey{ripple::generateSecretKey(
           keyType,
           rpc::fromJson<ripple::Seed>(jv, "SigningKeySeed"))}
