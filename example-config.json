@@ -1,0 +1,25 @@
+{
+    "LockingChainEndpoint": {
+      "IP": "127.0.0.1",
+      "Port": 6005
+    },
+    "IssuingChainEndpoint": {
+      "IP": "127.0.0.2",
+      "Port": 6007
+    },
+    "RPCEndpoint": {
+      "IP": "127.0.0.3",
+      "Port": 6010
+    },
+    "DBDir": "/var/xbridge/db",
+    "SigningKeySeed": "snwitEjg9Mr8n65cnqhATKcd1dQmv",
+    "SigningKeyType": "ed25519",
+    "LockingChainRewardAccount": "rhWQzvdmhf5vFS35vtKUSUwNZHGT53qQsg",
+    "IssuingChainRewardAccount": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+    "XChainBridge": {
+      "LockingChainDoor": "rhWQzvdmhf5vFS35vtKUSUwNZHGT53qQsg",
+      "LockingChainIssue": "XRP",
+      "IssuingChainDoor": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+      "IssuingChainIssue": "XRP"
+    }
+  }
