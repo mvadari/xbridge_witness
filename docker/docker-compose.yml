@@ -1,0 +1,33 @@
+
+version: "3.9"
+services:
+
+  xbridge:
+    container_name: rippled_xbridge
+    image: legleux/rippled-xbridge
+    command: "--conf /etc/opt/ripple/rippled.cfg"
+    volumes:
+      - ./cfg:/etc/opt/ripple/
+    # networks:
+    #  xchain-net:
+    #    ipv4_address: 10.0.0.2
+
+  witness:
+    container_name: xbridge_witnessd
+    image: legleux/xbridge_witnessd
+    command: "--config /opt/xbridge-witness/cfg/example-config.json"
+    volumes:
+      - ./cfg:/opt/xbridge-witness/cfg
+
+#     networks:
+#      xchain-net:
+#        ipv4_address: 10.0.0.3
+
+# networks:
+#   xchain-net:
+#     name: xchain-net
+#     driver: bridge
+#     ipam:
+#      config:
+#        - subnet: 10.0.0.0/16
+#          gateway: 10.0.0.1
