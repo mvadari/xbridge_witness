@@ -10,7 +10,7 @@ namespace xbwd {
 enum class ChainDir { issuingToLocking, lockingToIssuing };
 enum class ChainType { locking, issuing };
 
-inline std::string
+inline std::string const&
 to_string(ChainType ct)
 {
     if (ct == ChainType::locking)
@@ -22,7 +22,7 @@ to_string(ChainType ct)
     return r;
 }
 
-inline std::string
+inline std::string const&
 to_string(ChainDir cd)
 {
     if (cd == ChainDir::lockingToIssuing)
