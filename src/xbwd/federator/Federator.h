@@ -70,10 +70,22 @@ struct Submission
         ripple::STXChainAttestationBatch const& batch);
 };
 
+struct SignerListInfo
+{
+    enum KeySignerListStatus : int { unknown = -1, absent = 0, present };
+
+    KeySignerListStatus status_ = KeySignerListStatus::unknown;
+    bool presentInSignerList_ = false;
+    bool ignoreSignerList_ = false;
+    bool disableMaster_ = false;
+    ripple::AccountID regularDoorID_;
+
+    inline Json::Value
+    toJson() const;
+};
+
 class Federator : public std::enable_shared_from_this<Federator>
 {
-    enum class KeySignerListStatus : int { unknown = -1, absent = 0, present };
-
     enum LoopTypes { lt_event, lt_txnSubmit, lt_last };
     std::array<std::thread, lt_last> threads_;
     bool running_ = false;
@@ -87,7 +99,6 @@ class Federator : public std::enable_shared_from_this<Federator>
         std::shared_ptr<ChainListener> listener_;
         ripple::AccountID rewardAccount_;
         std::optional<config::TxnSubmit> txnSubmit_;
-        bool ignoreSignerList_ = false;
 
         explicit Chain(config::ChainConfig const& config);
     };
@@ -106,9 +117,7 @@ class Federator : public std::enable_shared_from_this<Federator>
     ripple::PublicKey const signingPK_;
     ripple::SecretKey const signingSK_;
 
-    ChainArray<KeySignerListStatus> inSignerList_{
-        KeySignerListStatus::unknown,
-        KeySignerListStatus::unknown};
+    ChainArray<SignerListInfo> signerListsInfo_;
 
     // Use a condition variable to prevent busy waiting when the queue is
     // empty
@@ -211,6 +220,15 @@ private:
     onEvent(event::XChainSignerListSet const& e);
 
     void
+    onEvent(event::XChainSetRegularKey const& e);
+
+    void
+    onEvent(event::XChainAccountSet const& e);
+
+    void
+    updateSignerListStatus(ChainType const chainType);
+
+    void
     pushAtt(
         ripple::STXChainBridge const& bridge,
         ripple::AttestationBatch::AttestationClaim&& att,
@@ -248,5 +266,22 @@ make_Federator(
     boost::asio::io_service& ios,
     config::Config const& config,
     beast::Journal j);
+
+//-------- implementation ---------
+
+inline Json::Value
+SignerListInfo::toJson() const
+{
+    Json::Value result{Json::objectValue};
+    result["status"] = static_cast<int>(status_);
+    result["disableMaster"] = disableMaster_;
+    result["regularDoorID"] = regularDoorID_.isNonZero()
+        ? ripple::toBase58(regularDoorID_)
+        : std::string();
+    result["presentInSignerList"] = presentInSignerList_;
+    result["ignoreSignerList"] = ignoreSignerList_;
+
+    return result;
+}
 
 }  // namespace xbwd
